@@ -1,77 +1,103 @@
-import React, { useState } from "react";
-import "./App.css";
+import React, { useState, useEffect } from "react";
+import axios from "axios";
+import { auth, firebase } from "./firebase";
 
 const RetrievePage = () => {
-  const backendUrl = process.env.REACT_APP_BACKEND_URL;
-  const [aadhar, setAadhar] = useState("");
-  const [password, setPassword] = useState("");
-  const [records, setRecords] = useState(null);
-  const [error, setError] = useState("");
+  const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [confirmationResult, setConfirmationResult] = useState(null);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [files, setFiles] = useState([]);
 
-  const handleRetrieve = async (e) => {
-    e.preventDefault();
-    setError("");
-    setRecords(null);
+  useEffect(() => {
+    // Clear previous verifier if it exists
+    if (window.recaptchaVerifier) {
+      window.recaptchaVerifier.clear();
+      delete window.recaptchaVerifier;
+    }
+  
+    setTimeout(() => {
+      try {
+        window.recaptchaVerifier = new firebase.auth.RecaptchaVerifier("recaptcha-container", {
+          size: "invisible",
+          callback: () => {
+            console.log("✅ reCAPTCHA verified");
+          },
+        });
+  
+        window.recaptchaVerifier.render();
+      } catch (err) {
+        console.error("❌ reCAPTCHA setup failed:", err);
+      }
+    }, 200); // wait a bit to ensure DOM is ready
+  }, []);
+  
+
+  const sendOtp = () => {
+    const fullPhone = phone.startsWith("+91") ? phone : `+91${phone}`;
+    auth
+      .signInWithPhoneNumber(fullPhone, window.recaptchaVerifier)
+      .then((result) => {
+        setConfirmationResult(result);
+        alert("OTP sent ✅");
+      })
+      .catch((err) => {
+        console.error("Error sending OTP:", err);
+        alert("Failed to send OTP");
+      });
+  };
+
+  const verifyOtp = () => {
+    if (!confirmationResult) return alert("Please send OTP first");
+    confirmationResult
+      .confirm(otp)
+      .then(() => {
+        alert("OTP verified ✅");
+        setOtpVerified(true);
+      })
+      .catch(() => alert("Invalid OTP ❌"));
+  };
+
+  const fetchFiles = async () => {
+    if (!otpVerified) return alert("Verify OTP first");
+
+    const formData = new FormData();
+    formData.append("phone_number", phone);
 
     try {
-      const formData = new FormData();
-      formData.append("aadhaar", aadhar);
-      formData.append("password", password);
-
-      const response = await fetch(`${backendUrl}/retrieve`, {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await response.json();
-      if (response.ok) {
-        setRecords(data.records);
-      } else {
-        setError(data.detail || "Failed to retrieve records.");
-      }
+      const res = await axios.post("http://localhost:8000/retrieve", formData);
+      setFiles(res.data.files || []);
     } catch (err) {
-      setError("Error connecting to the server.");
+      console.error("Failed to fetch files:", err);
+      alert("Fetch failed");
     }
   };
 
   return (
-    <div className="container">
-      <h2>Retrieve Medical Records</h2>
-      <form onSubmit={handleRetrieve}>
-        <input
-          type="text"
-          placeholder="Aadhaar Number"
-          value={aadhar}
-          onChange={(e) => setAadhar(e.target.value)}
-          required
-        />
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-        <button type="submit">Retrieve</button>
-      </form>
+    <div className="upload-container">
+      <div className="upload-card">
+        <h2>Retrieve Medical Records</h2>
 
-      {error && <p style={{ color: "red" }}>{error}</p>}
+        <input type="text" placeholder="Phone Number" value={phone} onChange={(e) => setPhone(e.target.value)} />
+        <button onClick={sendOtp}>Send OTP</button>
 
-      {records && (
-        <div className="records">
-          <h3>Retrieved Records:</h3>
-          <ul>
-            {records.map((record, index) => (
-              <li key={index}>
-                <strong>{record.file_name}</strong>:{" "}
-                <a href={`${backendUrl}/download/${record.file_id}`} target="_blank" rel="noopener noreferrer">
-                  Download
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+        <input type="text" placeholder="Enter OTP" value={otp} onChange={(e) => setOtp(e.target.value)} />
+        <button onClick={verifyOtp}>Verify OTP</button>
+
+        <button onClick={fetchFiles}>Retrieve Files</button>
+
+        <ul>
+          {files.map((file) => (
+            <li key={file._id}>
+              <a href={`http://localhost:8000/download/${file._id}`} target="_blank" rel="noreferrer">
+                {file.filename}
+              </a>
+            </li>
+          ))}
+        </ul>
+
+        <div id="recaptcha-container"></div>
+      </div>
     </div>
   );
 };
